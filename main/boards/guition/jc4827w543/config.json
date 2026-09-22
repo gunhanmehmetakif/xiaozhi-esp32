@@ -12,7 +12,8 @@
                 "CONFIG_WAKE_WORD_DISABLED=y",
                 "CONFIG_USE_AFE_WAKE_WORD=n",
                 "CONFIG_USE_ESP_WAKE_WORD=n",
-                "CONFIG_USE_CUSTOM_WAKE_WORD=n"
+                "CONFIG_USE_CUSTOM_WAKE_WORD=n",
+                "CONFIG_MMAP_FILE_NAME_LENGTH=32"
             ]
         },
         {
@@ -25,7 +26,8 @@
                 "CONFIG_USE_AFE_WAKE_WORD=n",
                 "CONFIG_USE_ESP_WAKE_WORD=n",
                 "CONFIG_USE_CUSTOM_WAKE_WORD=n",
-                "CONFIG_JC4827W543_EXTERNAL_AMP=y"
+                "CONFIG_JC4827W543_EXTERNAL_AMP=y",
+                "CONFIG_MMAP_FILE_NAME_LENGTH=32"
             ]
         }
     ]

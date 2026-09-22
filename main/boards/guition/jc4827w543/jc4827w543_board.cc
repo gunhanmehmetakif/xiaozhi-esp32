@@ -3,6 +3,7 @@
 #include "button.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
+#include "display/emote_display.h"
 #include "display/lcd_display.h"
 #include "esp_lcd_nv3041a.h"
 #include "wifi_board.h"
@@ -15,6 +16,7 @@
 #include <esp_lcd_touch_gt911.h>
 #include <esp_log.h>
 #include <esp_lvgl_port.h>
+#include <esp_timer.h>
 
 #define TAG "JC4827W543Board"
 
@@ -22,6 +24,7 @@
 // button on this board is the BOOT switch - which shares IO0 with the panel's
 // TE line and sits where a cased device cannot reach it. Without this the
 // screen is a display and nothing else: there is no way to start talking.
+#if !CONFIG_USE_EMOTE_MESSAGE_STYLE
 class JC4827W543Display : public SpiLcdDisplay {
 public:
     using SpiLcdDisplay::SpiLcdDisplay;
@@ -69,12 +72,17 @@ private:
         Application::GetInstance().ToggleChatState();
     }
 };
+#endif  // !CONFIG_USE_EMOTE_MESSAGE_STYLE
 
 class JC4827W543Board : public WifiBoard {
 private:
     Button boot_button_;
     i2c_master_bus_handle_t touch_i2c_bus_ = nullptr;
-    LcdDisplay* display_ = nullptr;
+    esp_lcd_touch_handle_t touch_handle_ = nullptr;
+    esp_timer_handle_t touch_timer_ = nullptr;
+    bool touch_was_pressed_ = false;
+    int64_t touch_pressed_at_ms_ = 0;
+    Display* display_ = nullptr;
 
 #ifdef CONFIG_JC4827W543_EXTERNAL_AMP
     // The on-board NS4168 is always powered and has no enable pin. This variant
@@ -140,9 +148,14 @@ private:
         // IPS glass: the picture is inverted without this.
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR));
 
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
+        display_ = new emote::EmoteDisplay(panel, panel_io, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#else
         display_ = new JC4827W543Display(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                          DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                          DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+#endif
     }
 
     void InitializeTouchI2c() {
@@ -197,6 +210,22 @@ private:
             return false;
         }
 
+        touch_handle_ = tp;
+
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+        // The emote face is drawn by esp_emote_gfx, not LVGL, so there is no
+        // LVGL input device to hang a click on. Poll the panel instead and
+        // treat a short press as the talk button.
+        const esp_timer_create_args_t timer_args = {
+            .callback = &JC4827W543Board::PollTouch,
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "jc4827_touch",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &touch_timer_));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(touch_timer_, 20 * 1000));
+#else
         lvgl_port_touch_cfg_t touch_cfg = {};
         touch_cfg.disp = lv_display_get_default();
         touch_cfg.handle = tp;
@@ -209,10 +238,45 @@ private:
             ESP_LOGE(TAG, "lvgl_port_add_touch failed, touch stays inactive");
             return false;
         }
+#endif
 
         ESP_LOGI(TAG, "GT911 ready at 0x%02X", dev_addr);
         return true;
     }
+
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+    static void PollTouch(void* arg) {
+        auto* self = static_cast<JC4827W543Board*>(arg);
+        if (self->touch_handle_ == nullptr) {
+            return;
+        }
+        if (esp_lcd_touch_read_data(self->touch_handle_) != ESP_OK) {
+            return;
+        }
+        esp_lcd_touch_point_data_t point = {};
+        uint8_t count = 0;
+        if (esp_lcd_touch_get_data(self->touch_handle_, &point, &count, 1) != ESP_OK) {
+            return;
+        }
+
+        const int64_t now_ms = esp_timer_get_time() / 1000;
+        const bool pressed = count > 0;
+        if (pressed && !self->touch_was_pressed_) {
+            self->touch_was_pressed_ = true;
+            self->touch_pressed_at_ms_ = now_ms;
+            return;
+        }
+        if (!pressed && self->touch_was_pressed_) {
+            self->touch_was_pressed_ = false;
+            // A long press is not a tap; leave room to mean something else
+            // later without it also toggling the conversation.
+            if (now_ms - self->touch_pressed_at_ms_ < 600) {
+                ESP_LOGI(TAG, "tap: toggling chat state");
+                Application::GetInstance().ToggleChatState();
+            }
+        }
+    }
+#endif
 
     void InitializeTouch() {
         // The address is latched from INT while RESET is released: low selects

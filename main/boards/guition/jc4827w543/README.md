@@ -38,18 +38,68 @@ python scripts/build.py guition/jc4827w543 --language en-US
 python scripts/build.py guition/jc4827w543 --name guition-jc4827w543-ext-amp
 ```
 
+## The animated face, and why it is off
+
+The default UI is the LVGL chat screen, which shows the transcript. The board
+can also run the emote display - an animated face from `esp_emote_expression` -
+with `CONFIG_USE_EMOTE_MESSAGE_STYLE` and `CONFIG_FLASH_EXPRESSION_ASSETS`. That
+path is built and working, but it is not the default: the face replaces the
+transcript rather than sitting beside it (`EmoteDisplay::SetChatMessage` only
+logs), and on this screen the chat UI reads better.
+
+None of the stock resolutions (320x240, 360x360, 1024x600) match 480x272, so
+the board carries its own profile in `assets/480_272/` and stages a trimmed copy
+of the expressions. The full set does not fit: `sleep`, `confused` and `Sad` are
+the three largest files at 441KB together, and `angry` and `shocked` follow, so
+`emote.json` maps every emotion onto the five that are kept - nothing is lost
+except distinct artwork. The profile's own config is named `emote_config.json`
+in the source tree because `scripts/build.py` treats every `config*.json` under
+`main/boards` as a board definition; CMake stages it as `config.json`.
+
+Two settings this depends on:
+
+- `CONFIG_MMAP_FILE_NAME_LENGTH=32`. At the default 16, asset names of 16
+  characters or more are truncated, and the expression library then fails to
+  find `icon_speaker` (exactly 16) and `icon_WiFi_failed` while `icon_mic` (12)
+  works. The symptom is a repeating `Not found` error, not a build failure.
+- `icon_tips` ships only in `emoji_large`, but the library asks for it whatever
+  collection is in use, so CMake copies that one file across.
+
+### Wake word
+
+The face is what makes a wake word possible. `esp_srmodel_init("model")` looks
+up a partition by that name - putting the model in the assets partition, which
+the emote profile will happily do, does not work - so it needs
+`partitions/v2/4m_wakeword.csv` (2560KB app / 384KB model / 1088KB assets).
+Emote mode links no LVGL chat fonts, so the app drops from 2716KB to 2431KB,
+and that is the only reason the model partition fits. Chat UI plus a wake word
+fits on paper but leaves under 40KB spare in every partition.
+
+It is tight at runtime too: free internal RAM drops from 158KB to 134KB once
+WakeNet is running, with the low-water mark around 40KB. An occasional
+`EspUdp: Send failed: errno=12` under load comes from there.
+
+WakeNet covers only a few languages, so for others (Turkish, for instance) the
+wake word has to be an English phrase - for example `--wake-word
+wn9_jarvis_tts`, "Jarvis", which works with the face on and the model partition
+in place.
+
 ## Starting a conversation
 
 A tap anywhere on the screen toggles listening. The board has to provide this:
-the stock chat UI installs no touch handler of its own, so without it the only
-way in is the BOOT switch, which shares IO0 with the panel's TE line and is not
+the stock UI installs no touch handler of its own, so without it the only way in
+is the BOOT switch, which shares IO0 with the panel's TE line and is not
 reachable on a cased device.
 
-The handler cannot hang on a single object either. LVGL delivers a click to the
-topmost clickable object under the finger, the chat area fills the screen, and
-chat bubbles are created per message on top of that - so the screen, the
-container and the chat area all carry it, and new bubbles are flagged to bubble
-their events up.
+In the chat UI the handler cannot hang on a single object. LVGL delivers a
+click to the topmost clickable object under the finger, the chat area fills the
+screen, and chat bubbles are created per message on top of that - so the screen,
+the container and the chat area all carry it, and new bubbles are flagged to
+bubble their events up.
+
+With the face on, LVGL is not driving the screen, so there is no input device to
+hang a click on. The board polls the panel every 20ms instead; a press shorter
+than 600ms counts as a tap.
 
 ## What this board does not have
 
@@ -63,10 +113,8 @@ they touch none of the display, touch, SD-card or amplifier nets.
 3008KB of app and 1024KB of assets, with no second app slot. A firmware update
 means a cable, and the app already uses about 90% of its partition.
 
-A wake word does not fit on top of this. `esp_srmodel_init("model")` looks up a
-partition by that name, so it needs one carved out of the 4MB, and the app plus
-a 16px font's assets leave no room for it. Turkish has no WakeNet model either,
-so it would have to be an English or Chinese phrase.
+A wake word does not fit on top of the chat UI; with the animated face it does,
+see above.
 
 The text font that lands in the assets partition is the `common` tier - `basic` plus the DeepSeek
 tokenizer's character set, so mostly CJK - at 1228KB for 20px against 865KB for

@@ -741,6 +741,13 @@ elseif(CONFIG_BOARD_TYPE_GUITION_JC4827W543)
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
     set(BUILTIN_ICON_FONT font_material_symbols_16_4)
     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
+    # Emote (animated face) build. The stock resolutions are 320x240, 360x360
+    # and 1024x600, so this board brings its own 480x272 profile, and its own
+    # trimmed copy of the expressions - the full set does not fit in 1MB next
+    # to a font and a wake-word model.
+    set(EMOTE_RESOLUTION "480_272")
+    set(JC4827W543_ASSETS_STAGING "${CMAKE_BINARY_DIR}/jc4827w543-assets")
+    set(EMOTE_EXTERNAL_PATH "${JC4827W543_ASSETS_STAGING}")
 elseif(CONFIG_BOARD_TYPE_WDMOMO_CGC)
     set(BOARD_DIR "wdmomo/esp32-cgc")
     set(BUILTIN_TEXT_FONT font_noto_sans_basic_14_1)
@@ -1200,6 +1207,51 @@ endif()
 find_component_by_pattern("xiaozhi-fonts" NOTO_FONTS_COMPONENT NOTO_FONTS_COMPONENT_PATH)
 if(NOTO_FONTS_COMPONENT_PATH)
     set(NOTO_FONTS_PATH "${NOTO_FONTS_COMPONENT_PATH}")
+endif()
+
+if(CONFIG_BOARD_TYPE_GUITION_JC4827W543 AND CONFIG_FLASH_EXPRESSION_ASSETS)
+    find_component_by_pattern("esp_emote_assets" EMOTE_ASSETS_COMPONENT EMOTE_ASSETS_PATH)
+    if(EMOTE_ASSETS_PATH)
+        set(JC4827W543_ASSETS_SRC "${CMAKE_CURRENT_SOURCE_DIR}/boards/guition/jc4827w543/assets")
+        file(REMOVE_RECURSE "${JC4827W543_ASSETS_STAGING}")
+        file(REMOVE
+            "${CMAKE_BINARY_DIR}/expression_assets.bin"
+            "${CMAKE_BINARY_DIR}/expression_assets.bin.validated"
+        )
+        file(MAKE_DIRECTORY "${JC4827W543_ASSETS_STAGING}/480_272")
+        file(MAKE_DIRECTORY "${JC4827W543_ASSETS_STAGING}/emoji_small")
+        # Only the expressions that fit. Everything emote.json refers to has to
+        # be here, plus "listen" and the icon_* files, which the expression
+        # library looks up by name.
+        foreach(_emote_file
+                neutral.eaf Happy.eaf cry.eaf winking.eaf listen.eaf
+                icon_mic.bin icon_speaker.bin icon_wifi.bin
+                icon_WiFi_failed.bin icon_Battery.bin)
+            file(COPY "${EMOTE_ASSETS_PATH}/emoji_small/${_emote_file}"
+                 DESTINATION "${JC4827W543_ASSETS_STAGING}/emoji_small")
+        endforeach()
+        # icon_tips only ships in the large collection, and the expression
+        # library asks for it by name whatever collection is in use.
+        file(COPY "${EMOTE_ASSETS_PATH}/emoji_large/icon_tips.bin"
+             DESTINATION "${JC4827W543_ASSETS_STAGING}/emoji_small")
+        file(COPY
+             "${JC4827W543_ASSETS_SRC}/480_272/emote.json"
+             "${JC4827W543_ASSETS_SRC}/480_272/layout.json"
+             DESTINATION "${JC4827W543_ASSETS_STAGING}/480_272")
+        # Named emote_config.json in the source tree: build.py treats every
+        # config*.json under main/boards as a board definition.
+        configure_file(
+            "${JC4827W543_ASSETS_SRC}/480_272/emote_config.json"
+            "${JC4827W543_ASSETS_STAGING}/480_272/config.json"
+            COPYONLY)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${JC4827W543_ASSETS_SRC}/480_272/emote_config.json"
+            "${JC4827W543_ASSETS_SRC}/480_272/emote.json"
+            "${JC4827W543_ASSETS_SRC}/480_272/layout.json"
+        )
+    else()
+        message(WARNING "esp_emote_assets component not found; JC4827W543 emote assets skipped")
+    endif()
 endif()
 
 if(CONFIG_BOARD_TYPE_ESP_VOCAT)
